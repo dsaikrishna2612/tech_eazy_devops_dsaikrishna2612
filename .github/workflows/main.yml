@@ -36,6 +36,11 @@ jobs:
   terraform:
     runs-on: ubuntu-latest
 
+    # 👇 Default working directory = assignment-3
+    defaults:
+      run:
+        working-directory: assignment-3
+
     env:
       AWS_REGION: eu-north-1
       TF_BUCKET: dsk-123465878fhdfgf
@@ -61,10 +66,10 @@ jobs:
       - name: Load environment config
         run: |
           if [ "${{ github.event.inputs.environment }}" = "dev" ]; then
-            source assignment-3/devconfig.sh
+            source devconfig.sh
             echo "TF_VAR_env_name=dev" >> $GITHUB_ENV
           else
-            source assignment-3/prodconfig.sh
+            source prodconfig.sh
             echo "TF_VAR_env_name=prod" >> $GITHUB_ENV
           fi
           env | grep TF_VAR_ >> $GITHUB_ENV
