@@ -61,10 +61,10 @@ jobs:
       - name: Load environment config
         run: |
           if [ "${{ github.event.inputs.environment }}" = "dev" ]; then
-            source ./devconfig.sh
+            source assignment-3/devconfig.sh
             echo "TF_VAR_env_name=dev" >> $GITHUB_ENV
           else
-            source ./prodconfig.sh
+            source assignment-3/prodconfig.sh
             echo "TF_VAR_env_name=prod" >> $GITHUB_ENV
           fi
           env | grep TF_VAR_ >> $GITHUB_ENV
