@@ -1,0 +1,114 @@
+name: Terraform Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Choose environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - prod
+      action:
+        description: "Terraform action"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - destroy
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: eu-north-1
+      TF_BUCKET: dsk-123465878fhdfgf
+      TF_REGION: eu-north-1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Load dev/prod configs
+      - name: Load environment config
+        run: |
+          if [ "${{ github.event.inputs.environment }}" = "dev" ]; then
+            source ./devconfig.sh
+            echo "TF_VAR_env_name=dev" >> $GITHUB_ENV
+          else
+            source ./prodconfig.sh
+            echo "TF_VAR_env_name=prod" >> $GITHUB_ENV
+          fi
+          env | grep TF_VAR_ >> $GITHUB_ENV
+
+      # 🔑 Inject SSH keys into Terraform variables
+      - name: Set SSH public key for Terraform
+        run: echo "TF_VAR_ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" >> $GITHUB_ENV
+
+      - name: Set SSH private key for Terraform
+        run: |
+          echo "TF_VAR_ssh_private_key<<EOF" >> $GITHUB_ENV
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        run: |
+          terraform init -reconfigure \
+            -backend-config="bucket=${{ env.TF_BUCKET }}" \
+            -backend-config="key=${{ github.event.inputs.environment }}/terraform.tfstate" \
+            -backend-config="region=${{ env.TF_REGION }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Plan
+        run: terraform plan -input=false
+
+      - name: Terraform Action (Apply/Destroy)
+        run: |
+          if [ "${{ github.event.inputs.action }}" = "apply" ]; then
+            terraform apply -auto-approve -input=false
+          elif [ "${{ github.event.inputs.action }}" = "destroy" ]; then
+            terraform destroy -auto-approve -input=false
+          else
+            echo "Unknown action: ${{ github.event.inputs.action }}"
+            exit 1
+          fi
+
+      # 📌 Capture EC2 Public IP from Terraform output
+      - name: Get EC2 Public IP
+        if: ${{ github.event.inputs.action == 'apply' }}
+        run: |
+          EC2_IP=$(terraform output -raw ec2_public_ip)
+          echo "EC2_PUBLIC_IP=$EC2_IP" >> $GITHUB_ENV
+          echo "EC2 Public IP is: $EC2_IP"
+
+      # ✅ Health check for app
+      - name: Validate App Health
+        if: ${{ github.event.inputs.action == 'apply' }}
+        run: |
+          echo "Checking App Health on ${{ env.EC2_PUBLIC_IP }} ..."
+          for i in {1..5}; do
+            if curl -s http://${{ env.EC2_PUBLIC_IP }}/hello | grep -i "Hello" > /dev/null; then
+              echo "✅ App is healthy and serving traffic"
+              exit 0
+            fi
+            echo "⏳ Waiting for app to start..."
+            sleep 30
+          done
+          echo "❌ App failed health check"
+          exit 1
